@@ -1,115 +1,121 @@
-import re
-
+import os
 from langchain.agents import create_agent
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg_pool import AsyncConnectionPool
 
 from agent.services import LLMService
 from agent.config import LLMConfig
-from agent.tools import search_web, get_stock_quote, get_company_overview, get_balance_sheet, get_income_statement, get_cash_flow
+from agent.prompts import SYSTEM_PROMPT
+from agent.tools import (
+    search_web,
+    get_stock_quote,
+    get_company_overview,
+    get_balance_sheet,
+    get_income_statement,
+    get_cash_flow,
+)
 
 llm = LLMService(config=LLMConfig()).get_client()
 
-SYSTEM_PROMPT = """
-You are an Experienced Stock Financial Analyst that can answer questions and provide information. 
-Do not depend on your pretrained knowledge. Always Use these tools to get current 
-information and provide accurate and relevant information to the user.
+DATABASE_URL = os.environ["DATABASE_URL"]
 
-IMPORTANT: When using the search_web tool, always search for the MOST CURRENT and recent information.
-- Include current date context in your searches (e.g., "2026", "August 2026", "latest", "current", "recent")
-- Never search for old time periods like "2024-25" unless the user specifically requests historical data
-- For financial data, always search for the latest available information  
-- Prioritize recent news, current financial reports, and latest developments
-- Be specific and precise in your search queries to get accurate results
-- Financial statement figures from these tools are already in the unit stated in their unit field - never rescale them yourself.
+TOOLS = [
+    search_web,
+    get_stock_quote,
+    get_company_overview,
+    get_balance_sheet,
+    get_income_statement,
+    get_cash_flow,
+]
 
-RESPONSE FORMATTING (follow this exactly):
-- Whenever you present financial figures across multiple periods, companies, or 
-  categories (revenue, EPS, balance sheet items, stock comparisons, etc.), you MUST 
-  format them as a GitHub-flavored Markdown table using pipes and a header 
-  separator row. Never align columns with tabs or spaces.
-- Correct format, exactly like this:
+_pool: AsyncConnectionPool | None = None
+_checkpointer: AsyncPostgresSaver | None = None
+agent = None 
 
-  | Metric | FY 2025-26 | FY 2024-25 |
-  | --- | --- | --- |
-  | Revenue | 230,293 | 216,840 |
-  | Net Income | 10,794 | 3,420 |
 
-- Incorrect (never do this): "Metric    FY 2025-26    FY 2024-25" as plain 
-  aligned text.
-- When comparing two or more stocks (e.g. "X vs Y"), put the comparable metrics 
-  in a single table with one column per stock, not separate paragraphs.
-- Use markdown headings (##, ###) to organize sections, and bold (**text**) for 
-  key takeaways or recommendations - not for entire sentences.
-- Keep prose sections concise; prefer a table or bullet list over a paragraph 
-  whenever you're listing more than 2-3 comparable data points.
-"""
+async def init_agent():
+    """
+    Call once at app startup (see app.py's lifespan). Wires the agent to a
+    Postgres-backed checkpointer so it remembers earlier turns in the SAME
+    conversation. Memory is keyed by "thread_id" -> we use the chat's UUID
+    as the thread_id, so every message sent with the same chat_id shares
+    context automatically. No need to manually reconstruct and resend
+    message history on each call — the checkpointer does that for you.
 
-agent = create_agent(
-    model=llm,
-    tools=[search_web, get_stock_quote, get_company_overview, get_balance_sheet, get_income_statement, get_cash_flow],
-    system_prompt=SYSTEM_PROMPT,
+    NOTE: `create_agent(..., checkpointer=...)` matches the current
+    LangChain/LangGraph agent-creation API. If your installed version
+    doesn't accept `checkpointer` here, tell me the version and I'll adjust
+    — this parameter has moved around across releases.
+    """
+    global _pool, _checkpointer, agent
+
+    try:
+        print("DEBUG: Starting agent initialization...")
+        _pool = AsyncConnectionPool(
+            conninfo=DATABASE_URL,
+            max_size=10,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+        )
+        await _pool.open()
+        print("DEBUG: Connection pool opened")
+
+        _checkpointer = AsyncPostgresSaver(_pool)
+        await _checkpointer.setup()
+        print("DEBUG: Checkpointer setup complete")
+
+        agent = create_agent(
+            model=llm,
+            tools=TOOLS,
+            system_prompt=SYSTEM_PROMPT,
+            checkpointer=_checkpointer,
+        )
+        print("DEBUG: Agent created successfully")
+    except Exception as e:
+        print(f"ERROR: Agent initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+async def close_agent():
+    if _pool is not None:
+        await _pool.close()
+
+
+# for development purpose only
+def ask(question: str, chat_id: str) -> dict:
+    """
+    Non-streaming path. Now conversation-aware: pass the SAME chat_id on
+    every call for a given conversation and the agent will have full
+    context of everything said before, without you resending history.
+    """
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": question}]},
+        config={"configurable": {"thread_id": chat_id}},
     )
 
-
-
-def ask(question: str) -> dict:
-    """
-    Ask the agent a question and return the final answer
-    along with the tools used during execution.
-    """
-
-    result = agent.invoke({
-        "messages": [
-            {
-                "role": "user",
-                "content": question
-            }
-        ]
-    })
-
     messages = result.get("messages", [])
-
     tools_used = []
-
-    # Extract tool calls
     for message in messages:
         if hasattr(message, "tool_calls") and message.tool_calls:
             for tool_call in message.tool_calls:
-                tools_used.append({
-                    "name": tool_call["name"],
-                    "args": tool_call["args"],
-                })
+                tools_used.append({"name": tool_call["name"], "args": tool_call["args"]})
 
-    # Get final AI response
     answer = ""
-
     for message in reversed(messages):
         if message.__class__.__name__ == "AIMessage":
             content = message.content
-
             if isinstance(content, str):
                 answer = content
                 break
-
-            # Handle structured content
             if isinstance(content, list):
                 texts = [
                     item["text"]
                     for item in content
-                    if isinstance(item, dict)
-                    and item.get("type") == "text"
+                    if isinstance(item, dict) and item.get("type") == "text"
                 ]
-
                 if texts:
                     answer = "\n".join(texts)
                     break
 
-    return {
-        "answer": answer,
-        "tools_used": tools_used,
-    }
-
-
-# if __name__ == "__main__":
-#     response = ask("tata energy vs adani energy, which stock you would Pick for me to invest in this current month?")
-#     print(response["answer"])
-#     print(response["tools_used"])
+    return {"answer": answer, "tools_used": tools_used}

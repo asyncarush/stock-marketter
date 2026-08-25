@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+const API_BASE = "http://localhost:8000";
+
 interface Message {
   id: string;
   role: "user" | "assistant";
@@ -19,10 +21,6 @@ interface Chat {
   createdAt: Date;
 }
 
-// Shared markdown styling used for both finished messages and the
-// in-progress streaming bubble. Tuned for chat context: smaller headings,
-// tighter spacing, cleaner code blocks (like Claude / ChatGPT responses)
-// instead of "document" sized prose.
 const proseClasses = `
   prose prose-base dark:prose-invert max-w-none
   [&>*:first-child]:mt-0 [&>*:last-child]:mb-0
@@ -48,77 +46,10 @@ const proseClasses = `
   prose-blockquote:not-italic prose-blockquote:my-4 prose-blockquote:font-normal
   prose-img:rounded-lg
 `;
-// Table rendering is handled by custom components (markdownComponents below)
-// instead of prose-table-* utilities, for a real boxed/bordered grid look.
 
-// How fast the "typing" reveal runs. Lower interval / higher chars-per-tick
-// = faster typing. Tuned to feel similar to Claude/ChatGPT's pace.
 const TYPE_INTERVAL_MS = 15;
 const CHARS_PER_TICK = 2;
 
-/**
- * Best-effort safety net: if any tab/space-aligned pseudo-table slips
- * through despite the backend now emitting real markdown tables, convert
- * it into real GFM pipe syntax so it still renders as a table instead of
- * collapsing into a wall of text. Leaves real markdown and normal prose
- * untouched.
- */
-function normalizeTables(markdown: string): string {
-  const lines = markdown.split("\n");
-  const output: string[] = [];
-  const splitRow = (line: string): string[] =>
-    line
-      .split(/\t+|\s{2,}/)
-      .map((c) => c.trim())
-      .filter(Boolean);
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (/^\s*\|/.test(line) || /^\s*#/.test(line) || line.trim() === "") {
-      output.push(line);
-      i++;
-      continue;
-    }
-
-    const cols = splitRow(line);
-    if (cols.length >= 2) {
-      const blockRows: string[][] = [cols];
-      let j = i + 1;
-      while (j < lines.length) {
-        const nextLine = lines[j];
-        if (nextLine.trim() === "" || /^\s*#/.test(nextLine)) break;
-        const nextCols = splitRow(nextLine);
-        if (nextCols.length < 2 || Math.abs(nextCols.length - cols.length) > 1)
-          break;
-        blockRows.push(nextCols);
-        j++;
-      }
-      if (blockRows.length >= 2) {
-        const colCount = Math.max(...blockRows.map((r) => r.length));
-        const pad = (row: string[]) => {
-          const r = [...row];
-          while (r.length < colCount) r.push("");
-          return r;
-        };
-        const header = pad(blockRows[0]);
-        output.push(`| ${header.join(" | ")} |`);
-        output.push(`|${header.map(() => " --- ").join("|")}|`);
-        for (let k = 1; k < blockRows.length; k++) {
-          output.push(`| ${pad(blockRows[k]).join(" | ")} |`);
-        }
-        i = j;
-        continue;
-      }
-    }
-    output.push(line);
-    i++;
-  }
-  return output.join("\n");
-}
-
-// Custom renderers -> real bordered/boxed grid instead of relying on
-// Tailwind typography's table styles.
 const markdownComponents = {
   table: ({ children }: any) => (
     <div className="my-4 overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm not-prose">
@@ -156,6 +87,7 @@ export default function Home() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [displayedContent, setDisplayedContent] = useState("");
   const responseEndRef = useRef<HTMLDivElement>(null);
 
@@ -166,6 +98,26 @@ export default function Home() {
   useEffect(() => {
     responseEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [displayedContent]);
+
+  // Load the chat list from Postgres on first render.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/chats`);
+        const rows = await res.json();
+        setChats(
+          rows.map((r: any) => ({
+            id: r.id,
+            title: r.title,
+            createdAt: new Date(r.createdAt),
+            messages: [], // loaded lazily when a chat is opened
+          })),
+        );
+      } catch (e) {
+        console.error("Failed to load chat list:", e);
+      }
+    })();
+  }, []);
 
   const startTypewriter = () => {
     if (typingTimerRef.current) return;
@@ -198,6 +150,9 @@ export default function Home() {
 
   const createNewChat = () => {
     stopTypewriter();
+    // Created client-side only; the backend row is created lazily on the
+    // first message sent (see /ask-stream), so an unused "New Chat" never
+    // clutters the database.
     const newChat: Chat = {
       id: crypto.randomUUID(),
       title: "New Chat",
@@ -212,13 +167,32 @@ export default function Home() {
     queueRef.current = "";
   };
 
-  const selectChat = (chat: Chat) => {
+  const selectChat = async (chat: Chat) => {
     if (isLoading) return;
     stopTypewriter();
-    setCurrentChat(chat);
     setDisplayedContent("");
     fullContentRef.current = "";
     queueRef.current = "";
+    setCurrentChat(chat);
+
+    // Messages aren't kept in the sidebar list response — fetch them now.
+    setIsLoadingMessages(true);
+    try {
+      const res = await fetch(`${API_BASE}/chats/${chat.id}/messages`);
+      const rows = await res.json();
+      const messages: Message[] = rows.map((r: any) => ({
+        id: r.id,
+        role: r.role,
+        content: r.content,
+        toolCalls: r.toolCalls,
+        timestamp: new Date(r.timestamp),
+      }));
+      setCurrentChat({ ...chat, messages });
+    } catch (e) {
+      console.error("Failed to load chat messages:", e);
+    } finally {
+      setIsLoadingMessages(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -255,9 +229,12 @@ export default function Home() {
     };
 
     setCurrentChat(updatedChat);
-    setChats((prev) =>
-      prev.map((c) => (c.id === updatedChat.id ? updatedChat : c)),
-    );
+    setChats((prev) => {
+      const exists = prev.some((c) => c.id === updatedChat.id);
+      return exists
+        ? prev.map((c) => (c.id === updatedChat.id ? updatedChat : c))
+        : [updatedChat, ...prev];
+    });
 
     setIsLoading(true);
     fullContentRef.current = "";
@@ -283,16 +260,22 @@ export default function Home() {
     };
 
     try {
-      const response = await fetch("http://localhost:8000/ask-stream", {
+      const response = await fetch(`${API_BASE}/ask-stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: userMessage.content }),
+        // chat_id ties this turn to the right conversation both in
+        // Postgres (message history) and in the agent's checkpointer
+        // (conversation memory) — same id, every turn.
+        body: JSON.stringify({
+          question: userMessage.content,
+          chat_id: activeChat.id,
+        }),
       });
+
+      console.log("Print Response", response);
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
-      // Carries any bytes/text that couldn't be decoded or wasn't a full
-      // line yet, across successive reader.read() calls.
       let sseBuffer = "";
 
       if (reader) {
@@ -300,17 +283,7 @@ export default function Home() {
           const { done, value } = await reader.read();
           if (done) break;
 
-          // `{ stream: true }` is essential here: without it, a multi-byte
-          // UTF-8 character (e.g. "₹", 3 bytes) that's split across two
-          // network chunks gets corrupted into "�" on each half instead of
-          // being reassembled correctly by the decoder's internal state.
           sseBuffer += decoder.decode(value, { stream: true });
-
-          // An SSE "data: {...}" line can also be split across chunk
-          // boundaries. Only process fully-received lines; keep whatever
-          // trailing partial line remains in the buffer for next time,
-          // instead of trying to JSON.parse an incomplete fragment (which
-          // silently drops content on parse failure).
           const lines = sseBuffer.split("\n");
           sseBuffer = lines.pop() ?? "";
 
@@ -325,8 +298,6 @@ export default function Home() {
         }
       }
 
-      // Flush any bytes still held by the decoder plus a final leftover
-      // line once the stream has ended.
       sseBuffer += decoder.decode();
       if (sseBuffer.startsWith("data: ")) {
         try {
@@ -402,9 +373,6 @@ export default function Home() {
                   <div className="text-sm font-medium truncate">
                     {chat.title}
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-500">
-                    {chat.messages.length} messages
-                  </div>
                 </button>
               ))}
             </div>
@@ -424,60 +392,67 @@ export default function Home() {
 
         <div className="max-w-4xl mx-auto w-full flex-1 flex flex-col">
           <div className="flex-1 overflow-y-auto space-y-6 px-4 py-6">
-            {currentChat?.messages.map((message) => (
-              <div
-                key={message.id}
-                className={`py-6 rounded-2xl px-4 ${
-                  message.role === "user"
-                    ? "bg-blue-50 dark:bg-blue-900/20"
-                    : "bg-white dark:bg-gray-800"
-                }`}
-              >
-                <div className="max-w-4xl mx-auto">
-                  <div className="flex items-start gap-4">
-                    <div
-                      className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${
-                        message.role === "user"
-                          ? "bg-blue-600 text-white"
-                          : "bg-green-600 text-white"
-                      }`}
-                    >
-                      {message.role === "user" ? "U" : "AI"}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-semibold mb-2 text-gray-900 dark:text-gray-100">
-                        {message.role === "user" ? "You" : "AI Assistant"}
+            {isLoadingMessages && (
+              <div className="text-center text-sm text-gray-500 dark:text-gray-400 py-6">
+                Loading conversation...
+              </div>
+            )}
+
+            {!isLoadingMessages &&
+              currentChat?.messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`py-6 rounded-2xl px-4 ${
+                    message.role === "user"
+                      ? "bg-blue-50 dark:bg-blue-900/20"
+                      : "bg-white dark:bg-gray-800"
+                  }`}
+                >
+                  <div className="max-w-4xl mx-auto">
+                    <div className="flex items-start gap-4">
+                      <div
+                        className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${
+                          message.role === "user"
+                            ? "bg-blue-600 text-white"
+                            : "bg-green-600 text-white"
+                        }`}
+                      >
+                        {message.role === "user" ? "U" : "AI"}
                       </div>
-                      <div className={proseClasses}>
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={markdownComponents}
-                        >
-                          {normalizeTables(message.content)}
-                        </ReactMarkdown>
-                      </div>
-                      {message.toolCalls && message.toolCalls.length > 0 && (
-                        <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700">
-                          <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                            Tools Used:
-                          </h4>
-                          <div className="flex flex-wrap gap-2">
-                            {message.toolCalls.map((call, index) => (
-                              <span
-                                key={index}
-                                className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
-                              >
-                                {call.name}
-                              </span>
-                            ))}
-                          </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold mb-2 text-gray-900 dark:text-gray-100">
+                          {message.role === "user" ? "You" : "AI Assistant"}
                         </div>
-                      )}
+                        <div className={proseClasses}>
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={markdownComponents}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        </div>
+                        {message.toolCalls && message.toolCalls.length > 0 && (
+                          <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700">
+                            <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                              Tools Used:
+                            </h4>
+                            <div className="flex flex-wrap gap-2">
+                              {message.toolCalls.map((call, index) => (
+                                <span
+                                  key={index}
+                                  className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                                >
+                                  {call.name}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))}
 
             {isLoading && (
               <div className="py-6 rounded-2xl px-4 bg-white dark:bg-gray-800">
@@ -519,7 +494,7 @@ export default function Home() {
                             remarkPlugins={[remarkGfm]}
                             components={markdownComponents}
                           >
-                            {normalizeTables(displayedContent)}
+                            {displayedContent}
                           </ReactMarkdown>
                           {isTyping && (
                             <span

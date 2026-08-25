@@ -1,5 +1,5 @@
 import json
-import re
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -7,9 +7,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_core.messages import AIMessageChunk
 
-from agent.main import ask, agent
+import agent.db.db as db
+import agent.main as agent_module
 
-app = FastAPI()
+from agent.utils import looks_like_table_row, normalize_table_block
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await db.init_db()
+    await agent_module.init_agent()
+    yield
+    await agent_module.close_agent()
+    await db.close_db()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,82 +34,91 @@ app.add_middleware(
 
 class QuestionRequest(BaseModel):
     question: str
+    chat_id: str 
+
+
+@app.get("/chats")
+async def list_chats_endpoint():
+    return await db.list_chats()
+
+
+@app.get("/chats/{chat_id}/messages")
+async def get_chat_messages_endpoint(chat_id: str):
+    return await db.get_messages(chat_id)
+
+
+@app.delete("/chats/{chat_id}")
+async def delete_chat_endpoint(chat_id: str):
+    await db.delete_chat(chat_id)
+    return {"ok": True}
 
 
 @app.post("/ask")
-def ask_endpoint(request: QuestionRequest):
-    result = ask(request.question)
+async def ask_endpoint(request: QuestionRequest):
+    if not await db.chat_exists(request.chat_id):
+        title = request.question[:30] + ("..." if len(request.question) > 30 else "")
+        await db.create_chat(request.chat_id, title)
+
+    await db.save_message(request.chat_id, "user", request.question)
+    result = agent_module.ask(request.question, request.chat_id)
+    await db.save_message(request.chat_id, "assistant", result["answer"], result["tools_used"])
     return result
 
 
-# ---------------------------------------------------------------------------
-# Table normalizer — held-back lines that look tabular get corrected into
-# real markdown tables before being flushed. Ordinary prose lines flush
-# immediately, so typing still feels token-by-token.
-# ---------------------------------------------------------------------------
-def looks_like_table_row(line: str) -> bool:
-    cols = [c for c in re.split(r"\t+|\s{2,}", line) if c.strip()]
-    return len(cols) >= 2 and not line.lstrip().startswith("|")
-
-
-def normalize_table_block(lines: list[str]) -> list[str]:
-    def split_row(line: str) -> list[str]:
-        return [c.strip() for c in re.split(r"\t+|\s{2,}", line) if c.strip()]
-
-    rows = [split_row(l) for l in lines]
-    if len(rows) < 2 or any(len(r) < 2 for r in rows):
-        return lines
-
-    col_count = max(len(r) for r in rows)
-    pad = lambda r: r + [""] * (col_count - len(r))
-
-    out = ["| " + " | ".join(pad(rows[0])) + " |"]
-    out.append("|" + "|".join([" --- "] * col_count) + "|")
-    for r in rows[1:]:
-        out.append("| " + " | ".join(pad(r)) + " |")
-    return out
 
 
 @app.post("/ask-stream")
 async def ask_stream_endpoint(request: QuestionRequest):
+    chat_id = request.chat_id
+
+    print("Coming here:::")
+
+    # First message of a new chat creates its row; subsequent messages
+    # reuse it. The title is set once, from the first question.
+    if not await db.chat_exists(chat_id):
+        title = request.question[:30] + ("..." if len(request.question) > 30 else "")
+        await db.create_chat(chat_id, title)
+
+    await db.save_message(chat_id, "user", request.question)
+
+    print("Coming here2:::")
+
     async def generate():
         line_buffer = ""
         table_block: list[str] = []
+        saved_parts: list[str] = []       # accumulates the exact text sent to the client, for persistence
+        tool_calls_collected: list[dict] = []
 
         def sse(payload: dict) -> str:
             return f"data: {json.dumps(payload)}\n\n"
 
+        async def flush_table_block():
+            nonlocal table_block
+            if table_block:
+                for line in normalize_table_block(table_block):
+                    text = line + "\n"
+                    saved_parts.append(text)
+                    yield sse({"type": "content", "content": text})
+                table_block = []
+
         try:
-            # stream_mode="messages" gives real per-token chunks, as tuples
-            # of (message_chunk, metadata), for every LLM call the agent
-            # makes — including intermediate tool-planning calls, which is
-            # why we still have to filter those out below.
-            async for chunk, metadata in agent.astream(
+            # config.configurable.thread_id is what gives the agent memory:
+            # the checkpointer looks up prior state for this chat_id and
+            # continues from there. We only ever send the NEW question here
+            # — no need to resend prior turns ourselves.
+            async for chunk, metadata in agent_module.agent.astream(
                 {"messages": [{"role": "user", "content": request.question}]},
+                config={"configurable": {"thread_id": chat_id}},
                 stream_mode="messages",
             ):
-                # Tool call chunks: surface as a distinct event, not as text.
-                #
-                # Bedrock streams a single tool call across MULTIPLE chunks:
-                # first one announces the name (args={}), later ones stream
-                # the args incrementally with name='' on the continuation
-                # chunks. If we emit an event on every non-empty tool_calls
-                # list, we get one correct badge + one blank-name badge per
-                # tool call. So: only emit when the name is actually present.
-                #
-                # Also: chunk.invalid_tool_calls can show up when Bedrock
-                # splits a tool's JSON args mid-string across chunks (e.g.
-                # '{"' then 'symbol": "X"}') — that's just a partial-parse
-                # artifact of viewing one chunk in isolation, not a real
-                # failure, so we deliberately ignore it here.
+                print("CHUNKS", chunk)
                 if isinstance(chunk, AIMessageChunk) and chunk.tool_calls:
                     for tool_call in chunk.tool_calls:
                         if tool_call.get("name"):
-                            yield sse({
-                                "type": "tool_call",
-                                "name": tool_call["name"],
-                                "args": tool_call.get("args", {}),
-                            })
+                            name = tool_call["name"]
+                            args = tool_call.get("args", {})
+                            tool_calls_collected.append({"name": name, "args": args})
+                            yield sse({"type": "tool_call", "name": name, "args": args})
                     continue
 
                 if not isinstance(chunk, AIMessageChunk):
@@ -105,9 +126,7 @@ async def ask_stream_endpoint(request: QuestionRequest):
 
                 text = chunk.content
                 if isinstance(text, list):
-                    text = "".join(
-                        p.get("text", "") for p in text if isinstance(p, dict)
-                    )
+                    text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
                 if not text:
                     continue
 
@@ -120,18 +139,22 @@ async def ask_stream_endpoint(request: QuestionRequest):
                         table_block.append(line)
                         continue
 
-                    if table_block:
-                        for normalized in normalize_table_block(table_block):
-                            yield sse({"type": "content", "content": normalized + "\n"})
-                        table_block = []
+                    async for evt in flush_table_block():
+                        yield evt
 
-                    yield sse({"type": "content", "content": line + "\n"})
+                    out = line + "\n"
+                    saved_parts.append(out)
+                    yield sse({"type": "content", "content": out})
 
-            if table_block:
-                for normalized in normalize_table_block(table_block):
-                    yield sse({"type": "content", "content": normalized + "\n"})
+            async for evt in flush_table_block():
+                yield evt
             if line_buffer:
+                saved_parts.append(line_buffer)
                 yield sse({"type": "content", "content": line_buffer})
+
+            # Persist the assistant's full answer now that streaming is done.
+            full_answer = "".join(saved_parts)
+            await db.save_message(chat_id, "assistant", full_answer, tool_calls_collected)
 
         except Exception as e:
             yield sse({"type": "error", "error": str(e)})
