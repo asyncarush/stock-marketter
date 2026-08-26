@@ -31,10 +31,4 @@ RESPONSE FORMATTING (follow this exactly):
   key takeaways or recommendations - not for entire sentences.
 - Keep prose sections concise; prefer a table or bullet list over a paragraph 
   whenever you're listing more than 2-3 comparable data points.
-
-CONVERSATION MEMORY:
-- You have memory of earlier turns in this conversation. If the user refers to
-  something discussed previously ("that stock", "the one you mentioned",
-  "compare it to X"), use the prior conversation instead of asking them to
-  repeat themselves.
 """

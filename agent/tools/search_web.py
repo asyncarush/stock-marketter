@@ -61,8 +61,7 @@ def search_web(query: str) -> ToolResult:
             query=query,
             include_answer="basic",
             search_depth="advanced",
-            max_results=5,
-            topic="business",
+            max_results=3,
         )
 
         raw_results = results.get("results", [])
