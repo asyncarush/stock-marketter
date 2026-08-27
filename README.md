@@ -7,6 +7,10 @@ An AI-powered stock market analysis assistant that gives you real-time financial
 ![Home Screen](assets/images/home.png)
 ![Chat Interface](assets/images/chat.png)
 
+### Demo  Video
+
+<video src="assets/demo.mov" controls width="100%" max-width="800px"></video>
+
 ## ✨ Features
 
 - **Real-time Stock Analysis** — Get current stock prices and market data
