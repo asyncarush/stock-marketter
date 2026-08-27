@@ -233,8 +233,6 @@ async def ask_stream_endpoint(request: QuestionRequest):
                 },
                 stream_mode="messages",
             ):
-                print("CHUNK:", chunk)
-
                 # =====================================================
                 # 1. IGNORE TOOL OUTPUT
                 # =====================================================
