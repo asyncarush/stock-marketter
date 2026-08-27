@@ -28,12 +28,27 @@ class LLMModelConfig:
 
 @dataclass
 class LLMConfig:
-
     llm_provider: LLMProvider = cast(
         LLMProvider,
         os.getenv("PROVIDER", "bedrock"),
     )
+    region_name: str = os.getenv(
+        "AWS_REGION",
+        "ap-south-1",
+    )
+    aws_access_key_id: SecretStr | None = (
+        SecretStr(aws_access_key)
+        if aws_access_key is not None
+        else None
+    )
+    aws_secret_access_key: SecretStr | None = (
+        SecretStr(aws_secret_access_key)
+        if aws_secret_access_key is not None
+        else None
+    )
 
+@dataclass
+class AWS_BEDROCK_CONFIG:
     models: list[LLMModelConfig] = field(
         default_factory=lambda: [
             LLMModelConfig(
@@ -48,7 +63,6 @@ class LLMConfig:
             ),
         ]
     )
-
     fallbacks: list[dict[str, list[str]]] = field(
         default_factory=lambda: [
             {
@@ -57,19 +71,24 @@ class LLMConfig:
         ]
     )
 
-    region_name: str = os.getenv(
-        "AWS_REGION",
-        "ap-south-1",
+@dataclass
+class GROQ_CONFIG:
+    models: list[LLMModelConfig] = field(
+        default_factory=lambda: [
+            LLMModelConfig(
+                model_id="groq/qwen/qwen3.6-27b",
+                model_name="primary-model",
+            ),
+            LLMModelConfig(
+                model_id="groq/openai/gpt-oss-120b",
+                model_name="secondary-model",
+            ),
+        ]
     )
-
-    aws_access_key_id: SecretStr | None = (
-        SecretStr(aws_access_key)
-        if aws_access_key is not None
-        else None
-    )
-
-    aws_secret_access_key: SecretStr | None = (
-        SecretStr(aws_secret_access_key)
-        if aws_secret_access_key is not None
-        else None
+    fallbacks: list[dict[str, list[str]]] = field(
+        default_factory=lambda: [
+            {
+                "primary-model": ["secondary-model"]
+            }
+        ]
     )

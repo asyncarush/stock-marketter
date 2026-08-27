@@ -7,7 +7,8 @@ An AI-powered stock market analysis assistant that gives you real-time financial
 ![Home Screen](assets/images/home.png)
 ![Chat Interface](assets/images/chat.png)
 
-### Demo  Video
+### Demo Video
+
 
 <video src="assets/demo.mov" controls width="100%" max-width="800px"></video>
 
@@ -31,7 +32,7 @@ An AI-powered stock market analysis assistant that gives you real-time financial
 | Backend                   | FastAPI, Python, LangChain, LangGraph |
 | Frontend                  | Next.js, React, Tailwind CSS          |
 | Database                  | PostgreSQL with pgvector              |
-| AI                        | Claude API                            |
+| AI                        | AWS Bedrock or Groq (free)            |
 | Package Manager (backend) | UV                                    |
 
 ---
@@ -47,6 +48,13 @@ cp .env.example .env
 ```
 
 Open the new `.env` file and fill in your values (API keys, database URL, etc).
+
+**Available AI Providers:**
+
+- **Groq** (Free) — Enter your `GROQ_API_KEY` and set `PROVIDER=groq`
+- **AWS Bedrock** — Enter your `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and set `PROVIDER=bedrock`
+
+Choose one provider and configure the corresponding credentials in your `.env` file.
 
 ---
 

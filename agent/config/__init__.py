@@ -1,5 +1,7 @@
-from .config import LLMConfig
+from .config import LLMConfig, AWS_BEDROCK_CONFIG, GROQ_CONFIG
 
 __all__ = [
-    "LLMConfig"
+    "LLMConfig",
+    "AWS_BEDROCK_CONFIG",
+    "GROQ_CONFIG"
 ]   
