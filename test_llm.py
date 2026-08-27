@@ -1,11 +1,40 @@
-from agent.config import LLMConfig
+
 from langchain_litellm import ChatLiteLLMRouter
 from langchain_core.language_models import BaseChatModel
 from dataclasses import dataclass
 from litellm import Router
+from typing import Optional
+
+
+@dataclass
+class LLMModelConfig:
+    model_id: str
+    model_name: str
+    temperature: Optional[float] = 0.0
+
+
+@dataclass
+class LLMConfig:
+    llm_provider: str
+    models: list[LLMModelConfig]
+    fallbacks: list[dict[str, list[str]]]
 
 
 
+LLM_CONFIG = LLMConfig(
+    llm_provider="bedrock",
+    models=[
+        LLMModelConfig(
+            model_id="bedrock/moonshotai.kimi-k2.5",
+            model_name="primary-model"
+        ),
+        LLMModelConfig(
+            model_id="bedrock/qwen.qwen3-vl-235b-a22b",
+            model_name="secondary-model"
+        )
+    ],
+    fallbacks=[{ "primary-model" : ["secondary-model"]}]
+)
 
 class LLMService:
 
@@ -41,8 +70,14 @@ class LLMService:
             })
 
 
-        return Router(model_list=model_list, fallbacks=self.config.fallbacks, routing_strategy="least-busy")
+        return Router(model_list=model_list, fallbacks=self.config.fallbacks)
 
 
     def get_client(self) -> BaseChatModel:
         return self.client
+
+
+LLM_SERVICE = LLMService(LLM_CONFIG)
+llm = LLM_SERVICE.get_client()
+result = llm.invoke("hi")
+print(result)

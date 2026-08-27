@@ -233,7 +233,6 @@ async def ask_stream_endpoint(request: QuestionRequest):
                 },
                 stream_mode="messages",
             ):
-                print("CHUNK TYPE:", type(chunk))
                 print("CHUNK:", chunk)
 
                 # =====================================================

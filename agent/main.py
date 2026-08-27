@@ -94,6 +94,11 @@ def ask(question: str, chat_id: str) -> dict:
         config={"configurable": {"thread_id": chat_id}},
     )
 
+            
+
+    print("DEBUG: Agent result:", result)
+    
+
     messages = result.get("messages", [])
     tools_used = []
     for message in messages:
