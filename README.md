@@ -1,58 +1,76 @@
-# Stock Market Analysis AI
+# Stock Marketter 📈
 
-An intelligent AI-powered stock market analysis assistant that provides real-time financial insights, company comparisons, and market data analysis.
+An AI-powered stock market analysis assistant that gives you real-time financial insights, company comparisons, and market data — all through a simple chat interface.
+
+---
 
 ![Home Screen](assets/images/home.png)
 ![Chat Interface](assets/images/chat.png)
 
-## Features
+## ✨ Features
 
-- **Real-time Stock Analysis**: Get current stock prices and market data
-- **Company Comparisons**: Compare multiple stocks side-by-side
-- **Financial Statements**: Access balance sheets, income statements, and cash flow data
-- **Conversational AI**: Chat interface for natural language queries
-- **Chat History**: Save and manage conversation history
-- **Modern UI**: Responsive design with togglable sidebar and smooth animations
-- **Streaming Responses**: Real-time typewriter effect for AI responses
-- **Data Persistence**: PostgreSQL backend for storing chat history
+- **Real-time Stock Analysis** — Get current stock prices and market data
+- **Company Comparisons** — Compare multiple stocks side-by-side
+- **Financial Statements** — Access balance sheets, income statements, and cash flow data
+- **Conversational AI** — Ask questions in plain English
+- **Chat History** — Save and revisit past conversations
+- **Modern UI** — Responsive design with a togglable sidebar and smooth animations
+- **Streaming Responses** — Typewriter-style live responses
+- **Data Persistence** — PostgreSQL backend for storing chat history
 
-## Environment Variables
+---
 
-Create a `.env` file in the project root with the following variables:
+## 🛠 Tech Stack
 
-```env
-# Database Configuration
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/stockmarketter
+| Layer                     | Technology                            |
+| ------------------------- | ------------------------------------- |
+| Backend                   | FastAPI, Python, LangChain, LangGraph |
+| Frontend                  | Next.js, React, Tailwind CSS          |
+| Database                  | PostgreSQL with pgvector              |
+| AI                        | Claude API                            |
+| Package Manager (backend) | UV                                    |
 
-# API Keys (if using external services)
-# TAVILY_API_KEY=your_tavily_api_key_here
-# ANTHROPIC_API_KEY=your_anthropic_api_key_here
-```
+---
 
-## Prerequisites
+## 🚀 Setup Guide
 
-- Python 3.11+
-- PostgreSQL database
-- Node.js 18+ (for frontend)
-- UV package manager
+This guide assumes zero prior setup — just follow each step in order.
 
-## Getting Started
-
-### 1. Clone the Repository
+### Step 1: Clone the project & set up environment variables
 
 ```bash
-git clone <repository-url>
-cd Stock-Marketter
+cp .env.example .env
 ```
 
-### 2. Set Up Database
+Open the new `.env` file and fill in your values (API keys, database URL, etc).
 
-**Install PostgreSQL:**
+---
+
+### Step 2: Install UV (Python package manager)
+
+If you don't have UV installed yet:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then install all backend dependencies:
+
+```bash
+uv sync
+```
+
+---
+
+### Step 3: Set up PostgreSQL with pgvector
+
+You need PostgreSQL installed with the `pgvector` extension enabled.
 
 **macOS:**
 
 ```bash
 brew install postgresql@15
+brew install pgvector
 brew services start postgresql@15
 ```
 
@@ -61,159 +79,88 @@ brew services start postgresql@15
 ```bash
 sudo apt update
 sudo apt install postgresql postgresql-contrib
+sudo apt install postgresql-15-pgvector
 sudo systemctl start postgresql
 ```
 
 **Windows:**
-Download and install from [PostgreSQL official site](https://www.postgresql.org/download/windows/)
+Download PostgreSQL from the [official site](https://www.postgresql.org/download/windows/) and install the `pgvector` extension separately.
 
-**Create Database:**
+**Create your database:**
 
 ```bash
-# Login to PostgreSQL
-psql postgres
-
-# Create database and user
-CREATE DATABASE stockmarketter;
-CREATE USER your_username WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE stockmarketter TO your_username;
-\q
+psql -U postgres
 ```
 
-**Update your .env file with your database credentials:**
+Then inside the `psql` prompt:
+
+```sql
+CREATE DATABASE stockmarketter;
+\c stockmarketter
+CREATE EXTENSION vector;
+```
+
+**Update your `.env` file** with your database connection string:
 
 ```env
 DATABASE_URL=postgresql://your_username:your_password@localhost:5432/stockmarketter
 ```
 
-### 3. Install Dependencies
+---
 
-```bash
-# Install Python dependencies
-uv sync
-
-# Install frontend dependencies
-cd frontend
-npm install
-cd ..
-```
-
-### 4. Configure Environment
-
-Copy the example environment file and update it:
-
-```bash
-cp .env.example .env
-# Edit .env with your database credentials
-```
-
-### 5. Start the Application
-
-**Terminal 1 - Backend:**
+### Step 4: Start the Backend
 
 ```bash
 uv run uvicorn app:app --reload
 ```
 
-**Terminal 2 - Frontend:**
+Your backend will run at **http://localhost:8000**
+
+---
+
+### Step 5: Start the Frontend
+
+Open a new terminal window:
 
 ```bash
 cd frontend
+npm install
 npm run dev
 ```
 
-### 6. Access the Application
+Your frontend will run at **http://localhost:3000**
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API Documentation: http://localhost:8000/docs
+---
 
-## Project Structure
+### Step 6: Open the App
 
-```
-Stock-Marketter/
-├── agent/              # AI agent logic
-│   ├── main.py         # Agent initialization and functions
-│   ├── tools/          # Stock analysis tools
-│   ├── services/       # LLM service
-│   └── db/             # Database operations
-├── frontend/           # Next.js frontend
-│   ├── app/            # Main application
-│   └── components/    # UI components
-├── app.py              # FastAPI backend
-└── .env                # Environment variables
-```
+| Service           | URL                        |
+| ----------------- | -------------------------- |
+| Frontend          | http://localhost:3000      |
+| Backend API       | http://localhost:8000      |
+| API Documentation | http://localhost:8000/docs |
 
-## Usage
+---
 
-1. **Start a New Chat**: Click the "+ New Chat" button
-2. **Ask Questions**: Type your stock market queries in the input field
-3. **View History**: Select previous conversations from the sidebar
-4. **Delete Chats**: Hover over a chat and click the delete icon
-5. **Toggle Sidebar**: Use the hamburger menu to show/hide the sidebar
+## 💬 How to Use
 
-## Example Queries
+1. **Start a New Chat** — Click the "+ New Chat" button
+2. **Ask a Question** — Type your stock market query into the input field
+3. **View History** — Select any previous conversation from the sidebar
+4. **Delete a Chat** — Hover over a chat and click the delete icon
+5. **Toggle Sidebar** — Use the hamburger menu to show or hide it
+
+---
+
+## 💡 Example Queries
 
 - "What's the current price of AAPL?"
 - "Compare Tesla vs Ford stock performance"
 - "Show me Microsoft's latest earnings report"
 - "What are the key financial ratios for Amazon?"
 
-## Tech Stack
+---
 
-- **Backend**: FastAPI, Python, LangChain
-- **Frontend**: Next.js, React, Tailwind CSS
-- **Database**: PostgreSQL with pgvector
-- **AI**: Claude API, LangGraph
+## 📄 License
 
-## Development
-
-### Running Tests
-
-```bash
-# Backend tests
-uv run pytest
-
-# Frontend tests
-cd frontend
-npm test
-```
-
-### Code Style
-
-- Backend: Follow PEP 8 guidelines
-- Frontend: ESLint and Prettier configured
-
-## Troubleshooting
-
-**Database Connection Issues**
-
-- Ensure PostgreSQL is running
-- Check DATABASE_URL in .env file
-- Verify database credentials
-
-**API Key Issues**
-
-- Ensure API keys are set in .env
-- Check API key validity and permissions
-
-**Frontend Build Issues**
-
-- Clear node_modules and reinstall
-- Check Node.js version compatibility
-
-## License
-
-MIT License - see LICENSE file for details
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
-
-## Support
-
-For issues and questions, please open an issue on GitHub or contact the development team.
+MIT License
